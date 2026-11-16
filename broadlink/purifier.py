@@ -5,6 +5,7 @@ import enum
 from . import exceptions as e
 from .device import Device
 
+
 @enum.unique
 class FanMode(enum.IntEnum):
     """Represents mode of the fan."""
@@ -17,20 +18,22 @@ class FanMode(enum.IntEnum):
     MANUAL = 5
 
     UNKNOWN = -1
-    
+
 
 class lifaair(Device):
-    """Controls a broadcom-based LIFAair air purifier."""
+    """Controls a Broadlink-based LIFAair air purifier / monitor."""
 
     TYPE = "LIFAAIR"
 
+    # Fan state byte values reported by the device. 0x01 means the main unit
+    # is offline / unpaired; temperature and humidity are then unavailable.
     FAN_STATE_TO_MODE = {
         0x81: FanMode.OFF,
         0xA5: FanMode.AUTO,
         0x95: FanMode.NIGHT,
         0x8D: FanMode.TURBO,
         0x85: FanMode.MANUAL,
-        0x01: None, # fan is offline
+        0x01: None,  # main unit offline / unpaired
     }
 
     @enum.unique
@@ -66,71 +69,82 @@ class lifaair(Device):
         return self.get_state()
 
     def set_fan_speed(self, fan_speed: int) -> dict:
-        """Set fan speed (0-121). Returns updated state. Note that fan mode will be changed to MANUAL by the device."""
+        """Set fan speed (0-121). Returns updated state.
+
+        Note that fan mode will be changed to MANUAL by the device.
+        """
         data = self._send(
             self._Operation.SET_STATE, self._Action.SET_FAN_SPEED, fan_speed
         )
         return self._decode_state(data)
 
     def get_state(self) -> dict:
-        """
-        Return the current state of the purifier as python dict.
-        
-        Note that the smart remote we're communicating with contains co2, tvoc and PM2.5 sensors,
-        while temperature, humidity and fan-state are fetched remotely from main unit which can be
-        offline (unplugged from mains, out of range) in which case those keys will be None.
-        
-        Format:
-        {
-            "temperature": 24.5,      # float, deg C, can be None if main-unit offline
-            "humidity": 41,           # int, %, can be None if main-unit offline
-            "co2": 425                # int, ppm
-            "tvoc": 150               # int, ug/m3
-            "pm10": 9                 # int, ug/m3 (unsure if this is PM10)
-            "pm2_5": 7                # int, ug/m3 (confirmed PM2.5)
-            "pm1": 5                  # int, ug/m3 (unsure if this is PM1.0)
-            "fan_mode": FanMode.AUTO  # FanMode enum, can be None if main-unit offline
-            "fan_speed": 50           # int, 0-121
-        }
+        """Return the current state of the purifier as a dict.
+
+        The smart remote contains CO2, TVOC, formaldehyde and PM sensors.
+        Temperature, humidity and fan state are fetched from the main unit,
+        which can be offline (unplugged or unpaired); those keys are then None.
+
+        Format::
+
+            {
+                "temperature": 24.5,           # float, deg C, or None
+                "humidity": 41,                # int, %, or None
+                "co2": 425,                    # int, ppm
+                "formaldehyde": 0.03,          # float, mg/m3
+                "tvoc": 150,                   # int, ug/m3
+                "pm1": 5,                      # int, ug/m3 (PM1.0)
+                "pm2_5": 7,                    # int, ug/m3 (PM2.5)
+                "pm10": 9,                     # int, ug/m3 (PM10)
+                "fan_mode": FanMode.AUTO,      # FanMode enum, or None
+                "fan_speed": 50,               # int, 0-121
+            }
         """
         data = self._send(self._Operation.GET_STATE)
         return self._decode_state(data)
-    
+
     def _decode_state(self, data: bytes) -> dict:
         raw = self._decode_state_raw(data)
         fan_mode = self._decode_fan_mode(raw["fan_state"], raw["fan_flags"])
-        isOffline = fan_mode is None
+        is_offline = fan_mode is None
         return {
-            "temperature": None if isOffline else raw["temperature"] / 10.0,
-            "humidity": None if isOffline else raw["humidity"],
+            "temperature": None if is_offline else raw["temperature"] / 10.0,
+            "humidity": None if is_offline else raw["humidity"],
             "co2": raw["co2"],
+            "formaldehyde": raw["formaldehyde"] / 100.0,
             "tvoc": raw["tvoc"] * 10,
-            "pm10": raw["pm10"],
-            "pm2_5": raw["pm2_5"],
             "pm1": raw["pm1"],
+            "pm2_5": raw["pm2_5"],
+            "pm10": raw["pm10"],
             "fan_mode": fan_mode,
             "fan_speed": raw["fan_speed"],
         }
 
     def _decode_state_raw(self, data: bytes) -> dict:
+        # PM field order verified against LAM01/LM05 display (PM1 <= PM2.5 <= PM10).
         return {
             "temperature": data[27] + 256 * data[28],
             "humidity": data[29],
             "co2": data[31] + 256 * data[32],
+            "formaldehyde": data[33] + 256 * data[34],
             "tvoc": data[35] + 256 * data[36],
-            "pm10": data[37] + 256 * data[38],
+            "pm1": data[37] + 256 * data[38],
             "pm2_5": data[39] + 256 * data[40],
-            "pm1": data[41] + 256 * data[42],
+            "pm10": data[41] + 256 * data[42],
             "fan_state": data[55],
             "fan_speed": data[56],
             "fan_flags": data[57],
         }
 
-    def _decode_fan_mode(self, fan_state: int, fan_flags: int) -> FanMode:
+    def _decode_fan_mode(self, fan_state: int, fan_flags: int):
+        # Check offline before anti-allergy: unpaired units can clear bit 0x40
+        # while still reporting fan_state 0x01 and stale temp/humidity defaults.
+        if fan_state == 0x01:
+            return None
         if fan_flags & 0x40 == 0:
             return FanMode.ANTI_ALLERGY
         return self.FAN_STATE_TO_MODE.get(fan_state, FanMode.UNKNOWN)
-    
+
     def _send(self, operation: int, action: int = 0, action_arg: int = 0) -> bytes:
         """Send a command to the device."""
         packet = bytearray(26)

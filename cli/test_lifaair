@@ -1,21 +1,33 @@
+#!/usr/bin/env python3
 import time
+
 import broadlink
-from broadlink.purifier import lifaair, FanMode
+from broadlink import FanMode, lifaair
+
 
 def print_state(state: dict):
     temperature = state["temperature"]
     humidity = state["humidity"]
-    print("-> Temperature=%s Humidity=%s CO2=%4dppm TVOC=%4dug/m3 PM2.5=%2dug/m3 FanSpeed=%d (%s)" % (
-        "%2.1fC" % temperature if temperature is not None else "-----",
-        "%2d%%" %humidity if humidity is not None else "---",
-        state["co2"],
-        state["tvoc"],
-        state["pm2_5"],
-        state["fan_speed"],
-        state["fan_mode"]))
+    print(
+        "-> Temperature=%s Humidity=%s CO2=%4dppm HCHO=%4.2fmg/m3 "
+        "TVOC=%4dug/m3 PM1=%2d PM2.5=%2d PM10=%2d FanSpeed=%d (%s)"
+        % (
+            "%2.1fC" % temperature if temperature is not None else "-----",
+            "%2d%%" % humidity if humidity is not None else "---",
+            state["co2"],
+            state["formaldehyde"],
+            state["tvoc"],
+            state["pm1"],
+            state["pm2_5"],
+            state["pm10"],
+            state["fan_speed"],
+            state["fan_mode"],
+        )
+    )
+
 
 print("Searching for lifaair devices... ")
-dev: lifaair = next(dev for dev in broadlink.discover() if isinstance(dev, lifaair))
+dev: lifaair = next(d for d in broadlink.discover() if isinstance(d, lifaair))
 print("Found %s" % dev)
 
 print("Authenticating... ", end="")
@@ -29,6 +41,8 @@ print("Getting state...")
 print_state(dev.get_state())
 
 for mode in FanMode:
+    if mode == FanMode.UNKNOWN:
+        continue
     print("Setting fan mode to %s" % mode)
     print_state(dev.set_fan_mode(mode))
     time.sleep(5)

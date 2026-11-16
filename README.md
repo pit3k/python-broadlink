@@ -221,6 +221,8 @@ data = device.check_sensors()
 
 ### Fetching purifier state
 ```python3
+from broadlink import FanMode
+
 data = device.get_state()
 ```
 
