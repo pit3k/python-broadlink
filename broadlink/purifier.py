@@ -75,8 +75,8 @@ class lifaair(Device):
     def set_fan_speed(self, fan_speed: int) -> dict:
         """Set fan speed (0-121). Returns updated state.
 
-        The device switches to MANUAL, except while OFF: the speed is
-        accepted and the fan spins, but the reported mode stays OFF.
+        The device reports MANUAL afterwards, except from OFF, where one
+        test showed OFF with the requested speed.
         """
         data = self._send(
             self._Operation.SET_STATE, self._Action.SET_FAN_SPEED, fan_speed
@@ -124,8 +124,8 @@ class lifaair(Device):
         else:
             temperature = raw["temperature"] / 10.0
             humidity = raw["humidity"]
-        # Mode and speed are independent. Standby is AUTO with speed 0.
-        # OFF may have speed > 0 (the fan still spins). MANUAL at speed 0 stops.
+        # Mode and speed are reported independently: AUTO can report speed 0
+        # (seen with clean air), and OFF reported speed 50 after set_fan_speed(50).
         return {
             "temperature": temperature,
             "humidity": humidity,
@@ -142,8 +142,9 @@ class lifaair(Device):
     def _decode_state_raw(self, data: bytes) -> dict:
         # PM field order verified against LAM01/LM05 display (PM1 <= PM2.5 <= PM10).
         # Byte 30 is always 0x02. Meaning unknown; not decoded.
-        # CO2 is exactly 400 for ~10 s after the station boots. No other byte
-        # marks that warm-up, and 400 ppm can be real, so the value is kept.
+        # CO2 reads exactly 400 for up to ~10 s after the station starts (5/5)
+        # and was also seen once when the main unit dropped out. 400 ppm can
+        # be real, so it is kept.
         return {
             "temperature": data[27] + 256 * data[28],
             "humidity": data[29],

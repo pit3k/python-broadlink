@@ -140,16 +140,16 @@ class LifaairDecodeTest(unittest.TestCase):
         self.assertEqual(state["fan_speed"], 13)
 
     def test_fan_mode_and_speed_are_reported_independently(self):
-        """Standby, OFF-with-speed and MANUAL-at-0 are not rewritten."""
+        """Reported mode and speed are not rewritten."""
         cases = (
-            # AUTO speed 0 (standby is the same bytes). 14:46:10.
+            # AUTO speed 0, clean air. 14:46:10.
             (
                 "09 01 16 02 dc 03 00 00 0a 00 01 00 00 00 01 00 "
                 "00 00 00 00 00 00 00 00 00 00 00 00 a5 00 c0",
                 FanMode.AUTO,
                 0,
             ),
-            # OFF with speed 50; the fan was spinning. 14:50:25.
+            # OFF reported speed 50 after set_fan_speed(50). 14:50:25.
             (
                 "0b 01 16 02 8f 03 00 00 0a 00 00 00 00 00 01 00 "
                 "00 00 00 00 00 00 00 00 00 00 00 00 81 32 c0",
@@ -177,7 +177,7 @@ class LifaairDecodeTest(unittest.TestCase):
                 FanMode.ANTI_ALLERGY,
                 60,
             ),
-            # MANUAL speed 0 stops the fan. 14:51:18.
+            # MANUAL reported at speed 0. 14:51:18.
             (
                 "0b 01 16 02 88 03 00 00 09 00 01 00 00 00 02 00 "
                 "00 00 00 00 00 00 00 00 00 00 00 00 85 00 c0",
