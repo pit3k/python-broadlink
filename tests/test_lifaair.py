@@ -5,6 +5,7 @@ Bytes are payload offsets 27..57 from firmware 10026, polled on 2026-11-17.
 
 import unittest
 
+from broadlink.exceptions import StorageError
 from broadlink.purifier import FanMode, lifaair
 
 
@@ -88,9 +89,11 @@ class LifaairDecodeTest(unittest.TestCase):
             self.assertIsNone(state["temperature"])
             self.assertIsNone(state["humidity"])
             self.assertIsNone(state["fan_mode"])
-            self.assertEqual(state["fan_speed"], 0)
+            self.assertIsNone(state["fan_speed"])
+            self.assertFalse(state["purifier_online"])
             self.assertEqual(state["co2"], co2)
             self.assertEqual(state["formaldehyde"], 0.0)
+            self.assertIsNotNone(state["pm2_5"])
 
     def test_reconnect_placeholder_zeros_are_none(self):
         """Online fan_state with 00 00 00 climate is not 0.0 deg C / 0 %."""
@@ -100,6 +103,7 @@ class LifaairDecodeTest(unittest.TestCase):
             self.assertIsNone(state["humidity"])
             self.assertEqual(state["fan_mode"], FanMode.AUTO)
             self.assertEqual(state["fan_speed"], speed)
+            self.assertTrue(state["purifier_online"])
             self.assertEqual(state["co2"], co2)
             self.assertEqual(state["formaldehyde"], 0.0)
 
@@ -111,6 +115,7 @@ class LifaairDecodeTest(unittest.TestCase):
         self.assertEqual(state["co2"], 958)
         self.assertEqual(state["fan_mode"], FanMode.AUTO)
         self.assertEqual(state["fan_speed"], 43)
+        self.assertTrue(state["purifier_online"])
 
     def test_co2_warmup_placeholder_is_kept(self):
         """400 ppm has no separate marker, so it is returned as 400."""
@@ -124,6 +129,7 @@ class LifaairDecodeTest(unittest.TestCase):
         self.assertEqual(state["pm10"], 3)
         self.assertEqual(state["fan_mode"], FanMode.AUTO)
         self.assertEqual(state["fan_speed"], 20)
+        self.assertTrue(state["purifier_online"])
 
     def test_spray_frame_keeps_pm_order_and_zero_formaldehyde(self):
         """PM offsets stay as verified, and a zero HCHO reading stays 0.0."""
@@ -138,6 +144,7 @@ class LifaairDecodeTest(unittest.TestCase):
         self.assertEqual(state["pm10"], 128)
         self.assertEqual(state["fan_mode"], FanMode.AUTO)
         self.assertEqual(state["fan_speed"], 13)
+        self.assertTrue(state["purifier_online"])
 
     def test_fan_mode_and_speed_are_reported_independently(self):
         """Reported mode and speed are not rewritten."""
@@ -196,7 +203,145 @@ class LifaairDecodeTest(unittest.TestCase):
             state = self.decode(raw_hex)
             self.assertEqual(state["fan_mode"], mode)
             self.assertEqual(state["fan_speed"], speed)
+            self.assertTrue(state["purifier_online"])
             self.assertIsNotNone(state["temperature"])
+            self.assertEqual(state["humidity"], 22)
+
+
+def response(fan, speed, flags):
+    """Return a state payload with a real climate reading and one fan triple."""
+    data = bytearray(58)
+    data[27:30] = b"\x0b\x01\x16"  # 26.7 C, 22 %
+    data[55] = fan
+    data[56] = speed
+    data[57] = flags
+    return bytes(data)
+
+
+class LifaairCommandTest(unittest.TestCase):
+    """Setters send one encoded argument and decode that response."""
+
+    def setUp(self):
+        self.dev = device()
+        self.calls = []
+
+    def script(self, payload):
+        """Replace _send with a recorder that returns payload."""
+
+        def send(operation, action=0, action_arg=0):
+            self.calls.append((operation, action, action_arg))
+            return payload
+
+        self.dev._send = send
+
+    def test_set_fan_mode_sends_one_mode_argument(self):
+        """Each mode command is one SET_FAN_MODE packet."""
+        cases = (
+            (FanMode.OFF, 1, 0x81, 0x00, 0xC0, FanMode.OFF, 0),
+            (FanMode.AUTO, 2, 0xA5, 0x1E, 0xC0, FanMode.AUTO, 30),
+            (FanMode.NIGHT, 6, 0x95, 0x0A, 0xC0, FanMode.NIGHT, 10),
+            (FanMode.TURBO, 7, 0x8D, 0x79, 0xC0, FanMode.TURBO, 121),
+            (FanMode.ANTI_ALLERGY, 11, 0x85, 0x3C, 0x80, FanMode.ANTI_ALLERGY, 60),
+        )
+        for mode, arg, fan, speed, flags, expect_mode, expect_speed in cases:
+            self.calls.clear()
+            self.script(response(fan, speed, flags))
+            state = self.dev.set_fan_mode(mode)
+            self.assertEqual(
+                self.calls,
+                [
+                    (
+                        lifaair._Operation.SET_STATE,
+                        lifaair._Action.SET_FAN_MODE,
+                        arg,
+                    )
+                ],
+            )
+            self.assertEqual(state["fan_mode"], expect_mode)
+            self.assertEqual(state["fan_speed"], expect_speed)
+            self.assertTrue(state["purifier_online"])
+
+    def test_set_fan_mode_without_a_command_sends_nothing(self):
+        """MANUAL, UNKNOWN and None have no mode argument."""
+        self.script(response(0x85, 50, 0xC0))
+        for mode in (FanMode.MANUAL, FanMode.UNKNOWN, None):
+            with self.assertRaises(ValueError):
+                self.dev.set_fan_mode(mode)
+        self.assertEqual(self.calls, [])
+
+    def test_set_fan_mode_device_error_is_not_retried(self):
+        """Error -5 from the device is StorageError, raised once."""
+
+        def send(operation, action=0, action_arg=0):
+            self.calls.append((operation, action, action_arg))
+            raise StorageError(-5, "The device storage is full")
+
+        self.dev._send = send
+        with self.assertRaises(StorageError):
+            self.dev.set_fan_mode(FanMode.TURBO)
+        self.assertEqual(
+            self.calls,
+            [
+                (
+                    lifaair._Operation.SET_STATE,
+                    lifaair._Action.SET_FAN_MODE,
+                    7,
+                )
+            ],
+        )
+
+    def test_set_fan_speed_sends_one_speed_argument(self):
+        """Speed is one SET_FAN_SPEED packet, including 0 and OFF."""
+        cases = (
+            (70, 0x85, 0x46, 0xC0, FanMode.MANUAL, 70),
+            (0, 0x85, 0x00, 0xC0, FanMode.MANUAL, 0),
+            (121, 0x85, 0x79, 0xC0, FanMode.MANUAL, 121),
+            (50, 0x81, 0x32, 0xC0, FanMode.OFF, 50),
+        )
+        for speed, fan, raw_speed, flags, mode, expect_speed in cases:
+            self.calls.clear()
+            self.script(response(fan, raw_speed, flags))
+            state = self.dev.set_fan_speed(speed)
+            self.assertEqual(
+                self.calls,
+                [
+                    (
+                        lifaair._Operation.SET_STATE,
+                        lifaair._Action.SET_FAN_SPEED,
+                        speed,
+                    )
+                ],
+            )
+            self.assertEqual(state["fan_mode"], mode)
+            self.assertEqual(state["fan_speed"], expect_speed)
+            self.assertTrue(state["purifier_online"])
+
+    def test_set_fan_speed_rejects_values_that_cannot_be_encoded(self):
+        """Only ints in 0..121 are sent."""
+        self.script(response(0x85, 50, 0xC0))
+        for speed in (-1, 122, True, "50"):
+            with self.assertRaises(ValueError):
+                self.dev.set_fan_speed(speed)
+        self.assertEqual(self.calls, [])
+
+
+class LifaairBit0Test(unittest.TestCase):
+    """Bit 0 of the fan-state byte does not change the mode."""
+
+    def test_bit0_clear_decodes_as_the_same_mode(self):
+        """0x84, 0xA4 and 0x80 are MANUAL, AUTO and OFF."""
+        cases = (
+            (0x84, 0x32, 0xC0, FanMode.MANUAL, 50),
+            (0xA4, 0x1E, 0xC0, FanMode.AUTO, 30),
+            (0x80, 0x00, 0xC0, FanMode.OFF, 0),
+        )
+        dev = device()
+        for fan, speed, flags, mode, expect_speed in cases:
+            state = dev._decode_state(response(fan, speed, flags))
+            self.assertEqual(state["fan_mode"], mode)
+            self.assertEqual(state["fan_speed"], expect_speed)
+            self.assertTrue(state["purifier_online"])
+            self.assertEqual(state["temperature"], 26.7)
             self.assertEqual(state["humidity"], 22)
 
 

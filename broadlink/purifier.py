@@ -59,25 +59,33 @@ class lifaair(Device):
     }
 
     def set_fan_mode(self, fan_mode: FanMode) -> dict:
-        """Set mode of the fan. Returns updated state."""
-        if fan_mode == FanMode.MANUAL:
-            return self.set_fan_speed(50)
+        """Set the fan mode. Returns the decoded response.
 
+        In OFF only OFF and AUTO are accepted; NIGHT, TURBO and
+        ANTI_ALLERGY raise the device error -5 (reported as StorageError)
+        and nothing changes. AUTO from OFF reports speed 30 and may drop
+        to 0 a few seconds later. NIGHT starts at 10, TURBO at 121,
+        ANTI_ALLERGY at 60. There is no MANUAL command; use set_fan_speed().
+        """
         action_arg = self.FAN_MODE_TO_ACTION_ARG.get(fan_mode)
-        if action_arg is not None:
-            data = self._send(
-                self._Operation.SET_STATE, self._Action.SET_FAN_MODE, action_arg
-            )
-            return self._decode_state(data)
-
-        return self.get_state()
+        if action_arg is None:
+            raise ValueError(f"{fan_mode!r} has no mode command")
+        data = self._send(
+            self._Operation.SET_STATE, self._Action.SET_FAN_MODE, action_arg
+        )
+        return self._decode_state(data)
 
     def set_fan_speed(self, fan_speed: int) -> dict:
-        """Set fan speed (0-121). Returns updated state.
+        """Set fan speed (0-121). Returns the decoded response.
 
-        The device reports MANUAL afterwards, except from OFF, where one
-        test showed OFF with the requested speed.
+        Any mode except OFF reports MANUAL with the new speed (0 included).
+        In OFF the speed is applied and the fan spins, but the device keeps
+        reporting OFF.
         """
+        if not isinstance(fan_speed, int) or isinstance(fan_speed, bool):
+            raise ValueError("fan_speed must be an int in 0..121")
+        if not 0 <= fan_speed <= 121:
+            raise ValueError("fan_speed must be an int in 0..121")
         data = self._send(
             self._Operation.SET_STATE, self._Action.SET_FAN_SPEED, fan_speed
         )
@@ -87,12 +95,13 @@ class lifaair(Device):
         """Return the current state of the purifier as a dict.
 
         CO2, TVOC, formaldehyde and PM come from the station. Temperature,
-        humidity and fan mode come from the purifier. Those three are None
-        when the purifier is offline. Temperature and humidity are also None
-        when bytes 27-29 are placeholder zeros (the first poll after it
-        reconnects, while fan_state is already online). Fan mode and fan
-        speed are otherwise the values the device reports, including AUTO at
-        speed 0 and OFF with a non-zero speed. Fan speed is always an int.
+        humidity, fan mode and fan speed come from the purifier. They are
+        None when it is offline (purifier_online is False); the speed byte
+        is then 0, a placeholder. Temperature and humidity are also None
+        when bytes 27-29 are placeholder zeros on the first poll after it
+        reconnects. Fan mode and fan speed are otherwise the values the
+        device reports, including AUTO at speed 0 and OFF with a non-zero
+        speed.
 
         Format::
 
@@ -106,7 +115,8 @@ class lifaair(Device):
                 "pm2_5": 7,                    # int, ug/m3
                 "pm10": 9,                     # int, ug/m3
                 "fan_mode": FanMode.AUTO,      # FanMode, or None
-                "fan_speed": 50,               # int, 0-121
+                "fan_speed": 50,               # int 0-121, or None
+                "purifier_online": True,       # bool, bit 7 of byte 55
             }
         """
         data = self._send(self._Operation.GET_STATE)
@@ -114,11 +124,13 @@ class lifaair(Device):
 
     def _decode_state(self, data: bytes) -> dict:
         raw = self._decode_state_raw(data)
+        # Bit 7 of the fan-state byte is set whenever the purifier is online.
+        purifier_online = bool(raw["fan_state"] & 0x80)
         fan_mode = self._decode_fan_mode(raw["fan_state"], raw["fan_flags"])
         # Bytes 27-29 are 00 00 00 when the purifier has no climate reading:
         # it is offline, or this is the first poll after it reconnects
         # (fan_state is already online). Not a real 0.0 deg C / 0 %.
-        if fan_mode is None or (raw["temperature"] == 0 and raw["humidity"] == 0):
+        if not purifier_online or (raw["temperature"] == 0 and raw["humidity"] == 0):
             temperature = None
             humidity = None
         else:
@@ -126,6 +138,7 @@ class lifaair(Device):
             humidity = raw["humidity"]
         # Mode and speed are reported independently: AUTO can report speed 0
         # (seen with clean air), and OFF reported speed 50 after set_fan_speed(50).
+        # Offline frames carry speed 0 as a placeholder.
         return {
             "temperature": temperature,
             "humidity": humidity,
@@ -136,7 +149,8 @@ class lifaair(Device):
             "pm2_5": raw["pm2_5"],
             "pm10": raw["pm10"],
             "fan_mode": fan_mode,
-            "fan_speed": raw["fan_speed"],
+            "fan_speed": raw["fan_speed"] if purifier_online else None,
+            "purifier_online": purifier_online,
         }
 
     def _decode_state_raw(self, data: bytes) -> dict:
@@ -160,13 +174,15 @@ class lifaair(Device):
         }
 
     def _decode_fan_mode(self, fan_state: int, fan_flags: int):
-        # 0x01 is offline, whatever the flags are. Anti-allergy is 0x85 with
-        # bit 0x40 clear. This unit sends 0x01 with flags 0xC0.
-        if fan_state == 0x01:
+        # Bit 7 clear: purifier offline or unpaired (observed as 0x01, flags 0xC0).
+        if fan_state & 0x80 == 0:
             return None
+        # Anti-allergy is 0x85 with bit 0x40 of the flags clear.
         if fan_flags & 0x40 == 0:
             return FanMode.ANTI_ALLERGY
-        return self.FAN_STATE_TO_MODE.get(fan_state, FanMode.UNKNOWN)
+        # Mode arguments 9 and 10 clear and set bit 0 of this byte without
+        # changing mode or speed; meaning unknown.
+        return self.FAN_STATE_TO_MODE.get(fan_state | 0x01, FanMode.UNKNOWN)
 
     def _send(self, operation: int, action: int = 0, action_arg: int = 0) -> bytes:
         """Send a command to the device."""
