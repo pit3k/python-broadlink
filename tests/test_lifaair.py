@@ -3,15 +3,8 @@
 Bytes are payload offsets 27..57 from firmware 10026, polled on 2026-11-17.
 """
 
-import struct
 import unittest
 
-from broadlink.exceptions import (
-    BroadlinkException,
-    CommandNotSupportedError,
-    StorageError,
-    check_error,
-)
 from broadlink.purifier import FanMode, lifaair
 
 
@@ -25,13 +18,6 @@ def payload(raw_hex):
 def device():
     """Return a lifaair instance that does not touch the network."""
     return lifaair(("127.0.0.1", 80), b"\x00" * 6, 0x4EC2)
-
-
-def response(error_code):
-    """Return a transport packet whose error field is error_code."""
-    packet = bytearray(0x38)
-    packet[0x22:0x24] = struct.pack("<h", error_code)
-    return packet
 
 
 # Station up, purifier not yet online. 14:31:15.
@@ -212,33 +198,6 @@ class LifaairDecodeTest(unittest.TestCase):
             self.assertEqual(state["fan_speed"], speed)
             self.assertIsNotNone(state["temperature"])
             self.assertEqual(state["humidity"], 22)
-
-
-class LifaairErrorTest(unittest.TestCase):
-    """Device error -5 on this unit is not a full storage."""
-
-    def test_pairing_error_is_not_storage_full(self):
-        """Error -5 is described as pairing, without the storage message."""
-        dev = device()
-        dev.send_packet = lambda packet_type, packet: response(-5)
-        with self.assertRaises(BroadlinkException) as caught:
-            dev.get_state()
-        err = caught.exception
-        self.assertNotIsInstance(err, StorageError)
-        self.assertEqual(err.errno, -5)
-        self.assertIn("pairing", str(err))
-        self.assertNotIn("storage", str(err).lower())
-
-    def test_other_errors_still_use_the_global_map(self):
-        """Only -5 is remapped; other codes and other callers stay put."""
-        dev = device()
-        dev.send_packet = lambda packet_type, packet: response(-4)
-        with self.assertRaises(CommandNotSupportedError):
-            dev.get_state()
-
-        with self.assertRaises(StorageError) as caught:
-            check_error(struct.pack("<h", -5))
-        self.assertIn("storage", str(caught.exception).lower())
 
 
 if __name__ == "__main__":

@@ -188,12 +188,6 @@ class lifaair(Device):
         packet[0x01] = packet_len >> 8
 
         resp = self.send_packet(0x6A, packet)
-        # -5 is "storage is full" on other Broadlink devices. This unit returned
-        # it while the purifier entered pairing mode; storage was not full.
-        try:
-            e.check_error(resp[0x22:0x24])
-        except e.StorageError:
-            raise e.BroadlinkException(
-                -5, "The purifier is entering pairing mode"
-            ) from None
+        # Seen returning -5 sporadically during power-cycling and pairing; cause unknown.
+        e.check_error(resp[0x22:0x24])
         return self.decrypt(resp[0x38:])
