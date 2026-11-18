@@ -25,8 +25,12 @@ class lifaair(Device):
 
     TYPE = "LIFAAIR"
 
-    # Fan state byte values reported by the device. 0x01 means the main unit
-    # is offline / unpaired; temperature and humidity are then unavailable.
+    # Fan state byte (payload[55]). 0x01 is the purifier offline or unpaired.
+    # On this unit (fw 10026) that is flags 0xC0 and temperature/humidity
+    # bytes 00 00 00. Another LM05 instead kept raw 25 and 45 (decoded
+    # 2.5 deg C / 45 %) with no purifier paired (mjg59/python-broadlink#807);
+    # that is not special-cased. A restart or re-pair returns the purifier
+    # itself to AUTO.
     FAN_STATE_TO_MODE = {
         0x81: FanMode.OFF,
         0xA5: FanMode.AUTO,
@@ -55,24 +59,39 @@ class lifaair(Device):
     }
 
     def set_fan_mode(self, fan_mode: FanMode) -> dict:
-        """Set mode of the fan. Returns updated state."""
-        if fan_mode == FanMode.MANUAL:
-            return self.set_fan_speed(50)
+        """Set the fan mode. Returns the decoded response.
 
+        In OFF only OFF and AUTO are accepted; NIGHT, TURBO and
+        ANTI_ALLERGY raise the device error -5 (reported as StorageError)
+        and nothing changes. AUTO from OFF reports speed 30 and may drop
+        to 0 a few seconds later. NIGHT starts at 10, TURBO at 121,
+        ANTI_ALLERGY at 60. There is no MANUAL command; use set_fan_speed().
+        While the purifier main unit is offline the station rejects mode
+        commands with the device error -5 (StorageError); the mode is not
+        applied after the unit reconnects either.
+        """
         action_arg = self.FAN_MODE_TO_ACTION_ARG.get(fan_mode)
-        if action_arg is not None:
-            data = self._send(
-                self._Operation.SET_STATE, self._Action.SET_FAN_MODE, action_arg
-            )
-            return self._decode_state(data)
-
-        return self.get_state()
+        if action_arg is None:
+            raise ValueError(f"{fan_mode!r} has no mode command")
+        data = self._send(
+            self._Operation.SET_STATE, self._Action.SET_FAN_MODE, action_arg
+        )
+        return self._decode_state(data)
 
     def set_fan_speed(self, fan_speed: int) -> dict:
-        """Set fan speed (0-121). Returns updated state.
+        """Set fan speed (0-121). Returns the decoded response.
 
-        Note that fan mode will be changed to MANUAL by the device.
+        Any mode except OFF reports MANUAL with the new speed (0 included).
+        In OFF the speed is applied and the fan spins, but the device keeps
+        reporting OFF. While the purifier main unit is offline the station
+        answers with success but returns the offline state (purifier_online
+        False) and the speed is not applied, neither then nor after the unit
+        reconnects.
         """
+        if not isinstance(fan_speed, int) or isinstance(fan_speed, bool):
+            raise ValueError("fan_speed must be an int in 0..121")
+        if not 0 <= fan_speed <= 121:
+            raise ValueError("fan_speed must be an int in 0..121")
         data = self._send(
             self._Operation.SET_STATE, self._Action.SET_FAN_SPEED, fan_speed
         )
@@ -81,9 +100,14 @@ class lifaair(Device):
     def get_state(self) -> dict:
         """Return the current state of the purifier as a dict.
 
-        The smart remote contains CO2, TVOC, formaldehyde and PM sensors.
-        Temperature, humidity and fan state are fetched from the main unit,
-        which can be offline (unplugged or unpaired); those keys are then None.
+        CO2, TVOC, formaldehyde and PM come from the station. Temperature,
+        humidity, fan mode and fan speed come from the purifier. They are
+        None when it is offline (purifier_online is False); the speed byte
+        is then 0, a placeholder. Temperature and humidity are also None
+        when bytes 27-29 are placeholder zeros on the first poll after it
+        reconnects. Fan mode and fan speed are otherwise the values the
+        device reports, including AUTO at speed 0 and OFF with a non-zero
+        speed.
 
         Format::
 
@@ -93,11 +117,12 @@ class lifaair(Device):
                 "co2": 425,                    # int, ppm
                 "formaldehyde": 0.03,          # float, mg/m3
                 "tvoc": 150,                   # int, ug/m3
-                "pm1": 5,                      # int, ug/m3 (PM1.0)
-                "pm2_5": 7,                    # int, ug/m3 (PM2.5)
-                "pm10": 9,                     # int, ug/m3 (PM10)
-                "fan_mode": FanMode.AUTO,      # FanMode enum, or None
-                "fan_speed": 50,               # int, 0-121
+                "pm1": 5,                      # int, ug/m3
+                "pm2_5": 7,                    # int, ug/m3
+                "pm10": 9,                     # int, ug/m3
+                "fan_mode": FanMode.AUTO,      # FanMode, or None
+                "fan_speed": 50,               # int 0-121, or None
+                "purifier_online": True,       # bool, bit 7 of byte 55
             }
         """
         data = self._send(self._Operation.GET_STATE)
@@ -105,11 +130,24 @@ class lifaair(Device):
 
     def _decode_state(self, data: bytes) -> dict:
         raw = self._decode_state_raw(data)
+        # Bit 7 of the fan-state byte is set whenever the purifier is online.
+        purifier_online = bool(raw["fan_state"] & 0x80)
         fan_mode = self._decode_fan_mode(raw["fan_state"], raw["fan_flags"])
-        is_offline = fan_mode is None
+        # Bytes 27-29 are 00 00 00 when the purifier has no climate reading:
+        # it is offline, or this is the first poll after it reconnects
+        # (fan_state is already online). Not a real 0.0 deg C / 0 %.
+        if not purifier_online or (raw["temperature"] == 0 and raw["humidity"] == 0):
+            temperature = None
+            humidity = None
+        else:
+            temperature = raw["temperature"] / 10.0
+            humidity = raw["humidity"]
+        # Mode and speed are reported independently: AUTO can report speed 0
+        # (seen with clean air), and OFF reported speed 50 after set_fan_speed(50).
+        # Offline frames carry speed 0 as a placeholder.
         return {
-            "temperature": None if is_offline else raw["temperature"] / 10.0,
-            "humidity": None if is_offline else raw["humidity"],
+            "temperature": temperature,
+            "humidity": humidity,
             "co2": raw["co2"],
             "formaldehyde": raw["formaldehyde"] / 100.0,
             "tvoc": raw["tvoc"] * 10,
@@ -117,11 +155,16 @@ class lifaair(Device):
             "pm2_5": raw["pm2_5"],
             "pm10": raw["pm10"],
             "fan_mode": fan_mode,
-            "fan_speed": raw["fan_speed"],
+            "fan_speed": raw["fan_speed"] if purifier_online else None,
+            "purifier_online": purifier_online,
         }
 
     def _decode_state_raw(self, data: bytes) -> dict:
         # PM field order verified against LAM01/LM05 display (PM1 <= PM2.5 <= PM10).
+        # Byte 30 is always 0x02. Meaning unknown; not decoded.
+        # CO2 reads exactly 400 for up to ~10 s after the station starts (5/5)
+        # and was also seen once when the main unit dropped out. 400 ppm can
+        # be real, so it is kept.
         return {
             "temperature": data[27] + 256 * data[28],
             "humidity": data[29],
@@ -137,13 +180,15 @@ class lifaair(Device):
         }
 
     def _decode_fan_mode(self, fan_state: int, fan_flags: int):
-        # Check offline before anti-allergy: unpaired units can clear bit 0x40
-        # while still reporting fan_state 0x01 and stale temp/humidity defaults.
-        if fan_state == 0x01:
+        # Bit 7 clear: purifier offline or unpaired (observed as 0x01, flags 0xC0).
+        if fan_state & 0x80 == 0:
             return None
+        # Anti-allergy is 0x85 with bit 0x40 of the flags clear.
         if fan_flags & 0x40 == 0:
             return FanMode.ANTI_ALLERGY
-        return self.FAN_STATE_TO_MODE.get(fan_state, FanMode.UNKNOWN)
+        # Mode arguments 9 and 10 clear and set bit 0 of this byte without
+        # changing mode or speed; meaning unknown.
+        return self.FAN_STATE_TO_MODE.get(fan_state | 0x01, FanMode.UNKNOWN)
 
     def _send(self, operation: int, action: int = 0, action_arg: int = 0) -> bytes:
         """Send a command to the device."""
@@ -166,5 +211,6 @@ class lifaair(Device):
         packet[0x01] = packet_len >> 8
 
         resp = self.send_packet(0x6A, packet)
+        # Seen returning -5 sporadically during power-cycling and pairing; cause unknown.
         e.check_error(resp[0x22:0x24])
         return self.decrypt(resp[0x38:])
