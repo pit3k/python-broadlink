@@ -66,6 +66,9 @@ class lifaair(Device):
         and nothing changes. AUTO from OFF reports speed 30 and may drop
         to 0 a few seconds later. NIGHT starts at 10, TURBO at 121,
         ANTI_ALLERGY at 60. There is no MANUAL command; use set_fan_speed().
+        While the purifier main unit is offline the station rejects mode
+        commands with the device error -5 (StorageError); the mode is not
+        applied after the unit reconnects either.
         """
         action_arg = self.FAN_MODE_TO_ACTION_ARG.get(fan_mode)
         if action_arg is None:
@@ -80,7 +83,10 @@ class lifaair(Device):
 
         Any mode except OFF reports MANUAL with the new speed (0 included).
         In OFF the speed is applied and the fan spins, but the device keeps
-        reporting OFF.
+        reporting OFF. While the purifier main unit is offline the station
+        answers with success but returns the offline state (purifier_online
+        False) and the speed is not applied, neither then nor after the unit
+        reconnects.
         """
         if not isinstance(fan_speed, int) or isinstance(fan_speed, bool):
             raise ValueError("fan_speed must be an int in 0..121")
