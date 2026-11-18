@@ -8,12 +8,9 @@ Keep a Changelog; versions follow Semantic Versioning.
 ### Added
 
 - The LIFAair LM05 air purifier (0x4EC2) is supported as `lifaair`:
-  station readings (CO2, TVOC, formaldehyde, PM) and the purifier's fan
-  mode, speed, temperature and humidity. Fan mode, speed, temperature
-  and humidity are `None` when the purifier is offline. `set_fan_mode`
-  and `set_fan_speed` each send one encoded argument and return the
-  decoded response. Tested on an LM05 with firmware 10026
-  (pit3k/python-broadlink#1, mjg59/python-broadlink#807).
+  station readings (CO2, TVOC, formaldehyde, PM1, PM2.5, PM10), the
+  purifier's temperature and humidity, and fan mode and speed, with a
+  `cli/test_lifaair` script. Contributed by pit3k.
 
 ## 1.3.0 - 2026-11-16
 
