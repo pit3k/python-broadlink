@@ -433,14 +433,14 @@ data = await device.check_sensors()
 
 ### Fetching purifier state
 ```python3
-from broadlink_async import FanMode
+from broadlink_async import lifaair
 
 data = await device.get_state()
 ```
 
 ### Controlling purifier fan
 ```python3
-await device.set_fan_mode(FanMode.TURBO)
+await device.set_fan_mode(lifaair.FanMode.TURBO)
 await device.set_fan_speed(50)
 ```
 

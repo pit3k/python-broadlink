@@ -443,7 +443,7 @@ def all_cases() -> list[dict]:
             "lifaair",
             0x4EC2,
             "set_fan_mode",
-            3,  # FanMode.TURBO
+            3,  # lifaair.FanMode.TURBO
             responses=[lifaair_payload(turbo)],
         )
     )
@@ -726,7 +726,7 @@ def error_cases() -> list[dict]:
             "cls": "lifaair",
             "devtype": 0x4EC2,
             "method": "set_fan_mode",
-            "args": [3],  # FanMode.TURBO; the device answers -5
+            "args": [3],  # lifaair.FanMode.TURBO; the device answers -5
             "kwargs": {},
             "responses": [EMPTY],
             "error_code": 0xFFFB,  # -5, StorageError

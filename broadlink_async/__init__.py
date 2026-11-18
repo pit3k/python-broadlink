@@ -11,7 +11,7 @@ from .cover import dooya, dooya2, wser
 from .device import Device, ping, scan, send_setup_packet
 from .hub import s3
 from .light import fl, lb1, lb2
-from .purifier import FanMode, lifaair
+from .purifier import lifaair
 from .remote import rm, rm4, rm4mini, rm4pro, rm5plus, rmmini, rmminib, rmpro
 from .sensor import a1, a2
 from .switch import bg1, ehc31, mp1, mp1s, sp1, sp2, sp2s, sp3, sp3s, sp4, sp4b

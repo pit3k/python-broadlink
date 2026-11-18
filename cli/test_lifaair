@@ -2,7 +2,7 @@
 import asyncio
 
 import broadlink_async
-from broadlink_async import FanMode, lifaair
+from broadlink_async import lifaair
 
 
 def print_state(state: dict):
@@ -49,8 +49,8 @@ async def main():
             "While OFF, modes other than OFF and AUTO are rejected with "
             "error -5 and nothing changes."
         )
-        for mode in FanMode:
-            if mode in (FanMode.MANUAL, FanMode.UNKNOWN):
+        for mode in lifaair.FanMode:
+            if mode in (lifaair.FanMode.MANUAL, lifaair.FanMode.UNKNOWN):
                 continue
             print("Setting fan mode to %s" % mode)
             print_state(await dev.set_fan_mode(mode))

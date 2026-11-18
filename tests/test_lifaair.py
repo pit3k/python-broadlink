@@ -10,7 +10,7 @@ import asyncio
 import pytest
 
 from broadlink_async.exceptions import StorageError
-from broadlink_async.purifier import FanMode, lifaair
+from broadlink_async.purifier import lifaair
 
 
 def payload(raw_hex: str) -> bytes:
@@ -108,7 +108,7 @@ def test_reconnect_placeholder_zeros_are_none():
         state = decode(raw_hex)
         assert state["temperature"] is None
         assert state["humidity"] is None
-        assert state["fan_mode"] == FanMode.AUTO
+        assert state["fan_mode"] == lifaair.FanMode.AUTO
         assert state["fan_speed"] == speed
         assert state["purifier_online"] is True
         assert state["co2"] == co2
@@ -121,7 +121,7 @@ def test_real_climate_after_placeholder():
     assert state["temperature"] == 26.4
     assert state["humidity"] == 22
     assert state["co2"] == 958
-    assert state["fan_mode"] == FanMode.AUTO
+    assert state["fan_mode"] == lifaair.FanMode.AUTO
     assert state["fan_speed"] == 43
     assert state["purifier_online"] is True
 
@@ -136,7 +136,7 @@ def test_co2_warmup_placeholder_is_kept():
     assert state["pm1"] == 0
     assert state["pm2_5"] == 2
     assert state["pm10"] == 3
-    assert state["fan_mode"] == FanMode.AUTO
+    assert state["fan_mode"] == lifaair.FanMode.AUTO
     assert state["fan_speed"] == 20
     assert state["purifier_online"] is True
 
@@ -152,7 +152,7 @@ def test_spray_frame_keeps_pm_order_and_zero_formaldehyde():
     assert state["pm1"] == 12
     assert state["pm2_5"] == 39
     assert state["pm10"] == 128
-    assert state["fan_mode"] == FanMode.AUTO
+    assert state["fan_mode"] == lifaair.FanMode.AUTO
     assert state["fan_speed"] == 13
     assert state["purifier_online"] is True
 
@@ -164,49 +164,49 @@ def test_fan_mode_and_speed_are_reported_independently():
         (
             "09 01 16 02 dc 03 00 00 0a 00 01 00 00 00 01 00 "
             "00 00 00 00 00 00 00 00 00 00 00 00 a5 00 c0",
-            FanMode.AUTO,
+            lifaair.FanMode.AUTO,
             0,
         ),
         # OFF reported speed 50 after set_fan_speed(50). 14:50:25.
         (
             "0b 01 16 02 8f 03 00 00 0a 00 00 00 00 00 01 00 "
             "00 00 00 00 00 00 00 00 00 00 00 00 81 32 c0",
-            FanMode.OFF,
+            lifaair.FanMode.OFF,
             50,
         ),
         # NIGHT. 14:50:48.
         (
             "0b 01 16 02 8d 03 00 00 0a 00 01 00 00 00 01 00 "
             "00 00 00 00 00 00 00 00 00 00 00 00 95 0a c0",
-            FanMode.NIGHT,
+            lifaair.FanMode.NIGHT,
             10,
         ),
         # TURBO. 14:50:58.
         (
             "0b 01 16 02 8b 03 00 00 09 00 01 00 00 00 01 00 "
             "00 00 00 00 00 00 00 00 00 00 00 00 8d 79 c0",
-            FanMode.TURBO,
+            lifaair.FanMode.TURBO,
             121,
         ),
         # ANTI_ALLERGY is 0x85 with flags 0x80. 14:50:04.
         (
             "0b 01 16 02 90 03 00 00 09 00 00 00 00 00 02 00 "
             "00 00 00 00 00 00 00 00 00 00 00 00 85 3c 80",
-            FanMode.ANTI_ALLERGY,
+            lifaair.FanMode.ANTI_ALLERGY,
             60,
         ),
         # MANUAL reported at speed 0. 14:51:18.
         (
             "0b 01 16 02 88 03 00 00 09 00 01 00 00 00 02 00 "
             "00 00 00 00 00 00 00 00 00 00 00 00 85 00 c0",
-            FanMode.MANUAL,
+            lifaair.FanMode.MANUAL,
             0,
         ),
         # MANUAL speed 50. 14:51:28.
         (
             "0b 01 16 02 89 03 00 00 0a 00 02 00 00 00 02 00 "
             "00 00 00 00 00 00 00 00 00 00 00 00 85 32 c0",
-            FanMode.MANUAL,
+            lifaair.FanMode.MANUAL,
             50,
         ),
     )
@@ -244,11 +244,19 @@ def test_set_fan_mode_sends_one_mode_argument():
     dev = device()
     calls: list = []
     cases = (
-        (FanMode.OFF, 1, 0x81, 0x00, 0xC0, FanMode.OFF, 0),
-        (FanMode.AUTO, 2, 0xA5, 0x1E, 0xC0, FanMode.AUTO, 30),
-        (FanMode.NIGHT, 6, 0x95, 0x0A, 0xC0, FanMode.NIGHT, 10),
-        (FanMode.TURBO, 7, 0x8D, 0x79, 0xC0, FanMode.TURBO, 121),
-        (FanMode.ANTI_ALLERGY, 11, 0x85, 0x3C, 0x80, FanMode.ANTI_ALLERGY, 60),
+        (lifaair.FanMode.OFF, 1, 0x81, 0x00, 0xC0, lifaair.FanMode.OFF, 0),
+        (lifaair.FanMode.AUTO, 2, 0xA5, 0x1E, 0xC0, lifaair.FanMode.AUTO, 30),
+        (lifaair.FanMode.NIGHT, 6, 0x95, 0x0A, 0xC0, lifaair.FanMode.NIGHT, 10),
+        (lifaair.FanMode.TURBO, 7, 0x8D, 0x79, 0xC0, lifaair.FanMode.TURBO, 121),
+        (
+            lifaair.FanMode.ANTI_ALLERGY,
+            11,
+            0x85,
+            0x3C,
+            0x80,
+            lifaair.FanMode.ANTI_ALLERGY,
+            60,
+        ),
     )
     for mode, arg, fan, speed, flags, expect_mode, expect_speed in cases:
         calls.clear()
@@ -271,7 +279,7 @@ def test_set_fan_mode_without_a_command_sends_nothing():
     dev = device()
     calls: list = []
     script(dev, calls, response(0x85, 50, 0xC0))
-    for mode in (FanMode.MANUAL, FanMode.UNKNOWN, None):
+    for mode in (lifaair.FanMode.MANUAL, lifaair.FanMode.UNKNOWN, None):
         with pytest.raises(ValueError):
             run(dev.set_fan_mode(mode))
     assert calls == []
@@ -288,7 +296,7 @@ def test_set_fan_mode_device_error_is_not_retried():
 
     dev._send = send
     with pytest.raises(StorageError):
-        run(dev.set_fan_mode(FanMode.TURBO))
+        run(dev.set_fan_mode(lifaair.FanMode.TURBO))
     assert calls == [
         (
             lifaair._Operation.SET_STATE,
@@ -303,10 +311,10 @@ def test_set_fan_speed_sends_one_speed_argument():
     dev = device()
     calls: list = []
     cases = (
-        (70, 0x85, 0x46, 0xC0, FanMode.MANUAL, 70),
-        (0, 0x85, 0x00, 0xC0, FanMode.MANUAL, 0),
-        (121, 0x85, 0x79, 0xC0, FanMode.MANUAL, 121),
-        (50, 0x81, 0x32, 0xC0, FanMode.OFF, 50),
+        (70, 0x85, 0x46, 0xC0, lifaair.FanMode.MANUAL, 70),
+        (0, 0x85, 0x00, 0xC0, lifaair.FanMode.MANUAL, 0),
+        (121, 0x85, 0x79, 0xC0, lifaair.FanMode.MANUAL, 121),
+        (50, 0x81, 0x32, 0xC0, lifaair.FanMode.OFF, 50),
     )
     for speed, fan, raw_speed, flags, mode, expect_speed in cases:
         calls.clear()
@@ -348,7 +356,7 @@ def test_device_error_minus_5_is_storage_error():
 
     dev.send_packet = send_packet
     with pytest.raises(StorageError) as raised:
-        run(dev.set_fan_mode(FanMode.TURBO))
+        run(dev.set_fan_mode(lifaair.FanMode.TURBO))
     assert raised.value.errno == -5
     assert len(calls) == 1
     assert calls[0][0] == 0x6A
@@ -357,9 +365,9 @@ def test_device_error_minus_5_is_storage_error():
 def test_bit0_clear_decodes_as_the_same_mode():
     """0x84, 0xA4 and 0x80 are MANUAL, AUTO and OFF."""
     cases = (
-        (0x84, 0x32, 0xC0, FanMode.MANUAL, 50),
-        (0xA4, 0x1E, 0xC0, FanMode.AUTO, 30),
-        (0x80, 0x00, 0xC0, FanMode.OFF, 0),
+        (0x84, 0x32, 0xC0, lifaair.FanMode.MANUAL, 50),
+        (0xA4, 0x1E, 0xC0, lifaair.FanMode.AUTO, 30),
+        (0x80, 0x00, 0xC0, lifaair.FanMode.OFF, 0),
     )
     dev = device()
     for fan, speed, flags, mode, expect_speed in cases:

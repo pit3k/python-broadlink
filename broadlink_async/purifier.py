@@ -6,20 +6,6 @@ from . import exceptions as e
 from .device import Device
 
 
-@enum.unique
-class FanMode(enum.IntEnum):
-    """Represents mode of the fan."""
-
-    OFF = 0
-    AUTO = 1
-    NIGHT = 2
-    TURBO = 3
-    ANTI_ALLERGY = 4
-    MANUAL = 5
-
-    UNKNOWN = -1
-
-
 class lifaair(Device):
     """Controls a Broadlink-based LIFAair air purifier / monitor.
 
@@ -30,13 +16,26 @@ class lifaair(Device):
 
     TYPE = "LIFAAIR"
 
+    @enum.unique
+    class FanMode(enum.IntEnum):
+        """Enumerates fan modes."""
+
+        OFF = 0
+        AUTO = 1
+        NIGHT = 2
+        TURBO = 3
+        ANTI_ALLERGY = 4
+        MANUAL = 5
+
+        UNKNOWN = -1
+
     # Fan state byte (payload[55]). 0x01 is the purifier offline or unpaired.
     # On this unit (fw 10026) that is flags 0xC0 and temperature/humidity
     # bytes 00 00 00. Another LM05 instead kept raw 25 and 45 (decoded
     # 2.5 deg C / 45 %) with no purifier paired (mjg59/python-broadlink#807);
     # that is not special-cased. A restart or re-pair returns the purifier
     # itself to AUTO.
-    FAN_STATE_TO_MODE = {
+    _FAN_STATE_TO_MODE = {
         0x81: FanMode.OFF,
         0xA5: FanMode.AUTO,
         0x95: FanMode.NIGHT,
@@ -55,7 +54,7 @@ class lifaair(Device):
         SET_FAN_SPEED = 1
         SET_FAN_MODE = 2
 
-    FAN_MODE_TO_ACTION_ARG = {
+    _FAN_MODE_TO_ACTION_ARG = {
         FanMode.OFF: 1,
         FanMode.AUTO: 2,
         FanMode.NIGHT: 6,
@@ -75,7 +74,7 @@ class lifaair(Device):
         commands with the device error -5 (StorageError); the mode is not
         applied after the unit reconnects either.
         """
-        action_arg = self.FAN_MODE_TO_ACTION_ARG.get(fan_mode)
+        action_arg = self._FAN_MODE_TO_ACTION_ARG.get(fan_mode)
         if action_arg is None:
             raise ValueError(f"{fan_mode!r} has no mode command")
         data = await self._send(
@@ -125,7 +124,7 @@ class lifaair(Device):
                 "pm1": 5,                   # int, ug/m3
                 "pm2_5": 7,                 # int, ug/m3
                 "pm10": 9,                  # int, ug/m3
-                "fan_mode": FanMode.AUTO,   # FanMode, or None
+                "fan_mode": lifaair.FanMode.AUTO,  # lifaair.FanMode, or None
                 "fan_speed": 50,            # int 0-121, or None
                 "purifier_online": True,    # bool, bit 7 of byte 55
             }
@@ -190,10 +189,10 @@ class lifaair(Device):
             return None
         # Anti-allergy is 0x85 with bit 0x40 of the flags clear.
         if fan_flags & 0x40 == 0:
-            return FanMode.ANTI_ALLERGY
+            return self.FanMode.ANTI_ALLERGY
         # Mode arguments 9 and 10 clear and set bit 0 of this byte without
         # changing mode or speed; meaning unknown.
-        return self.FAN_STATE_TO_MODE.get(fan_state | 0x01, FanMode.UNKNOWN)
+        return self._FAN_STATE_TO_MODE.get(fan_state | 0x01, self.FanMode.UNKNOWN)
 
     async def _send(self, operation: int, action: int = 0, action_arg: int = 0) -> bytes:
         """Send a command to the device."""
