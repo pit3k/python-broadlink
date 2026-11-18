@@ -154,3 +154,21 @@ broadlink_cli --device @BEDROOM.device --checknl
 ```
 broadlink_cli --device @BEDROOM.device --energy
 ```
+
+### Air purifiers
+
+#### Get state
+```
+broadlink_cli --device @BEDROOM.device --getstate
+```
+`--sensors` prints the same dict for an LM05.
+
+#### Set fan mode
+```
+broadlink_cli --device @BEDROOM.device --fanmode AUTO
+```
+
+#### Set fan speed
+```
+broadlink_cli --device @BEDROOM.device --fanspeed 50
+```
