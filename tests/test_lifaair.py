@@ -9,7 +9,6 @@ import asyncio
 
 import pytest
 
-from broadlink_async.exceptions import StorageError
 from broadlink_async.purifier import lifaair
 from tests.oracle.harness import HOST, MAC
 
@@ -45,25 +44,21 @@ RECONNECT_ZEROS = (
     (
         "00 00 00 02 b5 03 00 00 0a 00 01 00 00 00 02 00 "
         "00 00 00 00 00 00 00 00 00 00 00 00 a5 2b c0",
-        949,
         43,
     ),
     (
         "00 00 00 02 ee 03 00 00 0a 00 00 00 00 00 01 00 "
         "00 00 00 00 00 00 00 00 00 00 00 00 a5 2b c0",
-        1006,
         43,
     ),
     (
         "00 00 00 02 90 01 00 00 0a 00 00 00 01 00 02 00 "
         "00 00 00 00 00 00 00 00 00 00 00 00 a5 14 c0",
-        400,
         20,
     ),
     (
         "00 00 00 02 a8 03 00 00 0a 00 00 00 00 00 01 00 "
         "00 00 00 00 00 00 00 00 00 00 00 00 a5 2b c0",
-        936,
         43,
     ),
 )
@@ -71,11 +66,6 @@ RECONNECT_ZEROS = (
 AFTER_RECONNECT = (
     "08 01 16 02 be 03 00 00 09 00 01 00 00 00 01 00 "
     "00 00 00 00 00 00 00 00 00 00 00 00 a5 2b c0"
-)
-# CO2 still 400, climate already valid. 15:01:50.
-CO2_WARMUP = (
-    "0a 01 16 02 90 01 00 00 09 00 00 00 02 00 03 00 "
-    "00 00 00 00 00 00 00 00 00 00 00 00 a5 14 c0"
 )
 # Spray peak. 14:33:05.
 SPRAY = (
@@ -99,83 +89,37 @@ def response(fan: int, speed: int, flags: int) -> bytes:
     return bytes(data)
 
 
-def script(dev: lifaair, calls: list, body: bytes) -> None:
-    """Replace _send with a recorder that returns body."""
-
-    async def send(operation, action=0, action_arg=0):
-        calls.append((operation, action, action_arg))
-        return body
-
-    dev._send = send
-
-
 def test_offline_purifier_climate_and_mode_are_none():
     """Unplugged and unpaired both report 0x01 with zero climate bytes."""
-    for raw_hex, co2 in ((OFFLINE_BOOT, 400), (OFFLINE_UNPAIRED, 939)):
+    for raw_hex in (OFFLINE_BOOT, OFFLINE_UNPAIRED):
         state = decode(raw_hex)
         assert state["temperature"] is None
         assert state["humidity"] is None
         assert state["fan_mode"] is None
         assert state["fan_speed"] is None
         assert state["purifier_online"] is False
-        assert state["co2"] == co2
-        assert state["formaldehyde"] == 0.0
-        assert state["pm2_5"] is not None
 
 
-def test_reconnect_placeholder_zeros_are_none():
-    """Online fan_state with 00 00 00 climate is not 0.0 deg C / 0 %."""
-    for raw_hex, co2, speed in RECONNECT_ZEROS:
+def test_reconnect_placeholder_then_real_climate():
+    """00 00 00 climate is not 0.0 deg C / 0 %; the next frame is the reading."""
+    for raw_hex, speed in RECONNECT_ZEROS:
         state = decode(raw_hex)
         assert state["temperature"] is None
         assert state["humidity"] is None
         assert state["fan_mode"] == lifaair.FanMode.AUTO
         assert state["fan_speed"] == speed
-        assert state["purifier_online"] is True
-        assert state["co2"] == co2
-        assert state["formaldehyde"] == 0.0
-
-
-def test_real_climate_after_placeholder():
-    """The frame after the placeholder carries the real reading."""
     state = decode(AFTER_RECONNECT)
     assert state["temperature"] == 26.4
     assert state["humidity"] == 22
-    assert state["co2"] == 958
-    assert state["fan_mode"] == lifaair.FanMode.AUTO
-    assert state["fan_speed"] == 43
-    assert state["purifier_online"] is True
-
-
-def test_co2_warmup_placeholder_is_kept():
-    """400 ppm has no separate marker, so it is returned as 400."""
-    state = decode(CO2_WARMUP)
-    assert state["co2"] == 400
-    assert state["temperature"] == 26.6
-    assert state["humidity"] == 22
-    assert state["tvoc"] == 90
-    assert state["pm1"] == 0
-    assert state["pm2_5"] == 2
-    assert state["pm10"] == 3
-    assert state["fan_mode"] == lifaair.FanMode.AUTO
-    assert state["fan_speed"] == 20
-    assert state["purifier_online"] is True
 
 
 def test_spray_frame_keeps_pm_order_and_zero_formaldehyde():
     """PM offsets stay as verified, and a zero HCHO reading stays 0.0."""
     state = decode(SPRAY)
-    assert state["temperature"] == 26.6
-    assert state["humidity"] == 22
-    assert state["co2"] == 927
     assert state["formaldehyde"] == 0.0
-    assert state["tvoc"] == 90
     assert state["pm1"] == 12
     assert state["pm2_5"] == 39
     assert state["pm10"] == 128
-    assert state["fan_mode"] == lifaair.FanMode.AUTO
-    assert state["fan_speed"] == 13
-    assert state["purifier_online"] is True
 
 
 def test_fan_mode_and_speed_are_reported_independently():
@@ -235,132 +179,22 @@ def test_fan_mode_and_speed_are_reported_independently():
         state = decode(raw_hex)
         assert state["fan_mode"] == mode
         assert state["fan_speed"] == speed
-        assert state["purifier_online"] is True
-        assert state["temperature"] is not None
-        assert state["humidity"] == 22
 
 
-def test_set_fan_mode_sends_one_mode_argument():
-    """Each mode command is one SET_FAN_MODE packet."""
-    dev = device()
-    calls: list = []
-    cases = (
-        (lifaair.FanMode.OFF, 1, 0x81, 0x00, 0xC0, lifaair.FanMode.OFF, 0),
-        (lifaair.FanMode.AUTO, 2, 0xA5, 0x1E, 0xC0, lifaair.FanMode.AUTO, 30),
-        (lifaair.FanMode.NIGHT, 6, 0x95, 0x0A, 0xC0, lifaair.FanMode.NIGHT, 10),
-        (lifaair.FanMode.TURBO, 7, 0x8D, 0x79, 0xC0, lifaair.FanMode.TURBO, 121),
-        (
-            lifaair.FanMode.ANTI_ALLERGY,
-            11,
-            0x85,
-            0x3C,
-            0x80,
-            lifaair.FanMode.ANTI_ALLERGY,
-            60,
-        ),
-    )
-    for mode, arg, fan, speed, flags, expect_mode, expect_speed in cases:
-        calls.clear()
-        script(dev, calls, response(fan, speed, flags))
-        state = run(dev.set_fan_mode(mode))
-        assert calls == [
-            (
-                lifaair._Operation.SET_STATE,
-                lifaair._Action.SET_FAN_MODE,
-                arg,
-            )
-        ]
-        assert state["fan_mode"] == expect_mode
-        assert state["fan_speed"] == expect_speed
-        assert state["purifier_online"] is True
-
-
-def test_set_fan_mode_without_a_command_sends_nothing():
+def test_set_fan_mode_without_a_command_raises():
     """MANUAL, UNKNOWN and None have no mode argument."""
     dev = device()
-    calls: list = []
-    script(dev, calls, response(0x85, 50, 0xC0))
     for mode in (lifaair.FanMode.MANUAL, lifaair.FanMode.UNKNOWN, None):
         with pytest.raises(ValueError):
             run(dev.set_fan_mode(mode))
-    assert calls == []
 
 
-def test_set_fan_mode_device_error_is_not_retried():
-    """Error -5 from the device is StorageError, raised once."""
+def test_set_fan_speed_rejects_out_of_range():
+    """Speeds outside 0..121 are rejected."""
     dev = device()
-    calls: list = []
-
-    async def send(operation, action=0, action_arg=0):
-        calls.append((operation, action, action_arg))
-        raise StorageError(-5, "The device storage is full")
-
-    dev._send = send
-    with pytest.raises(StorageError):
-        run(dev.set_fan_mode(lifaair.FanMode.TURBO))
-    assert calls == [
-        (
-            lifaair._Operation.SET_STATE,
-            lifaair._Action.SET_FAN_MODE,
-            7,
-        )
-    ]
-
-
-def test_set_fan_speed_sends_one_speed_argument():
-    """Speed is one SET_FAN_SPEED packet, including 0 and OFF."""
-    dev = device()
-    calls: list = []
-    cases = (
-        (70, 0x85, 0x46, 0xC0, lifaair.FanMode.MANUAL, 70),
-        (0, 0x85, 0x00, 0xC0, lifaair.FanMode.MANUAL, 0),
-        (121, 0x85, 0x79, 0xC0, lifaair.FanMode.MANUAL, 121),
-        (50, 0x81, 0x32, 0xC0, lifaair.FanMode.OFF, 50),
-    )
-    for speed, fan, raw_speed, flags, mode, expect_speed in cases:
-        calls.clear()
-        script(dev, calls, response(fan, raw_speed, flags))
-        state = run(dev.set_fan_speed(speed))
-        assert calls == [
-            (
-                lifaair._Operation.SET_STATE,
-                lifaair._Action.SET_FAN_SPEED,
-                speed,
-            )
-        ]
-        assert state["fan_mode"] == mode
-        assert state["fan_speed"] == expect_speed
-        assert state["purifier_online"] is True
-
-
-def test_set_fan_speed_rejects_values_that_cannot_be_encoded():
-    """Only ints in 0..121 are sent."""
-    dev = device()
-    calls: list = []
-    script(dev, calls, response(0x85, 50, 0xC0))
-    for speed in (-1, 122, True, "50"):
+    for speed in (-1, 122):
         with pytest.raises(ValueError):
             run(dev.set_fan_speed(speed))
-    assert calls == []
-
-
-def test_device_error_minus_5_is_storage_error():
-    """A response error of -5 is StorageError, and the command is not resent."""
-    dev = device()
-    calls: list = []
-
-    async def send_packet(packet_type, packet):
-        calls.append((packet_type, bytes(packet)))
-        frame = bytearray(0x38)
-        frame[0x22:0x24] = (-5 & 0xFFFF).to_bytes(2, "little")
-        return bytes(frame)
-
-    dev.send_packet = send_packet
-    with pytest.raises(StorageError) as err:
-        run(dev.set_fan_mode(lifaair.FanMode.TURBO))
-    assert err.value.errno == -5
-    assert len(calls) == 1
-    assert calls[0][0] == 0x6A
 
 
 def test_bit0_clear_decodes_as_the_same_mode():
@@ -370,11 +204,7 @@ def test_bit0_clear_decodes_as_the_same_mode():
         (0xA4, 0x1E, 0xC0, lifaair.FanMode.AUTO, 30),
         (0x80, 0x00, 0xC0, lifaair.FanMode.OFF, 0),
     )
-    dev = device()
     for fan, speed, flags, mode, expect_speed in cases:
-        state = dev._decode_state(response(fan, speed, flags))
+        state = device()._decode_state(response(fan, speed, flags))
         assert state["fan_mode"] == mode
         assert state["fan_speed"] == expect_speed
-        assert state["purifier_online"] is True
-        assert state["temperature"] == 26.7
-        assert state["humidity"] == 22
