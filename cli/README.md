@@ -161,7 +161,6 @@ broadlink_cli --device @BEDROOM.device --energy
 ```
 broadlink_cli --device @BEDROOM.device --getstate
 ```
-`--sensors` prints the same dict for an LM05.
 
 #### Set fan mode
 ```

@@ -168,12 +168,9 @@ async def run_commands(stack: AsyncExitStack):
     if args.energy:
         print(await dev.get_energy())
     if args.sensors:
-        if isinstance(dev, broadlink_async.lifaair):
-            print(await dev.get_state())
-        else:
-            data = await dev.check_sensors()
-            for key in data:
-                print("{} {}".format(key, data[key]))
+        data = await dev.check_sensors()
+        for key in data:
+            print("{} {}".format(key, data[key]))
     if args.send:
         data = (
             pulses_to_data(parse_pulses(args.data), repeat=args.repeat)
