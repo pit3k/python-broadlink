@@ -149,10 +149,7 @@ async def run_commands(stack: AsyncExitStack):
     if args.getstate:
         print(await dev.get_state())
     if args.fanmode:
-        try:
-            fan_mode = broadlink_async.lifaair.FanMode[args.fanmode]
-        except KeyError:
-            fan_mode = broadlink_async.lifaair.FanMode(auto_int(args.fanmode))
+        fan_mode = broadlink_async.lifaair.FanMode[args.fanmode]
         print(await dev.set_fan_mode(fan_mode))
     if args.fanspeed is not None:
         print(await dev.set_fan_speed(args.fanspeed))

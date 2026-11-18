@@ -11,6 +11,7 @@ import pytest
 
 from broadlink_async.exceptions import StorageError
 from broadlink_async.purifier import lifaair
+from tests.oracle.harness import HOST, MAC
 
 
 def payload(raw_hex: str) -> bytes:
@@ -22,7 +23,7 @@ def payload(raw_hex: str) -> bytes:
 
 def device() -> lifaair:
     """Return a lifaair instance that does not touch the network."""
-    return lifaair(("127.0.0.1", 80), b"\x00" * 6, 0x4EC2)
+    return lifaair(HOST, MAC, 0x4EC2)
 
 
 def run(coro):
@@ -86,6 +87,26 @@ SPRAY = (
 def decode(raw_hex: str) -> dict:
     """Decode one captured frame."""
     return device()._decode_state(payload(raw_hex))
+
+
+def response(fan: int, speed: int, flags: int) -> bytes:
+    """Return a state payload with a real climate reading and one fan triple."""
+    data = bytearray(58)
+    data[27:30] = b"\x0b\x01\x16"  # 26.7 C, 22 %
+    data[55] = fan
+    data[56] = speed
+    data[57] = flags
+    return bytes(data)
+
+
+def script(dev: lifaair, calls: list, body: bytes) -> None:
+    """Replace _send with a recorder that returns body."""
+
+    async def send(operation, action=0, action_arg=0):
+        calls.append((operation, action, action_arg))
+        return body
+
+    dev._send = send
 
 
 def test_offline_purifier_climate_and_mode_are_none():
@@ -219,26 +240,6 @@ def test_fan_mode_and_speed_are_reported_independently():
         assert state["humidity"] == 22
 
 
-def response(fan: int, speed: int, flags: int) -> bytes:
-    """Return a state payload with a real climate reading and one fan triple."""
-    data = bytearray(58)
-    data[27:30] = b"\x0b\x01\x16"  # 26.7 C, 22 %
-    data[55] = fan
-    data[56] = speed
-    data[57] = flags
-    return bytes(data)
-
-
-def script(dev: lifaair, calls: list, body: bytes) -> None:
-    """Replace _send with a recorder that returns body."""
-
-    async def send(operation, action=0, action_arg=0):
-        calls.append((operation, action, action_arg))
-        return body
-
-    dev._send = send
-
-
 def test_set_fan_mode_sends_one_mode_argument():
     """Each mode command is one SET_FAN_MODE packet."""
     dev = device()
@@ -355,9 +356,9 @@ def test_device_error_minus_5_is_storage_error():
         return bytes(frame)
 
     dev.send_packet = send_packet
-    with pytest.raises(StorageError) as raised:
+    with pytest.raises(StorageError) as err:
         run(dev.set_fan_mode(lifaair.FanMode.TURBO))
-    assert raised.value.errno == -5
+    assert err.value.errno == -5
     assert len(calls) == 1
     assert calls[0][0] == 0x6A
 
