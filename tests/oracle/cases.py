@@ -83,6 +83,13 @@ def a1_payload(temp=(23, 5), hum=(45, 2), light=2, air=1, noise=0) -> str:
     return p.hex()
 
 
+def lifaair_payload(frame_from_27: str) -> str:
+    """LM05 state body. Captured bytes sit at offset 27; the decoder reads 27..57."""
+    data = bytearray(58)
+    data[27:] = bytes.fromhex(frame_from_27)
+    return data.hex()
+
+
 def a2_payload() -> str:
     p = bytearray(0x18)
     p[0x0D:0x0F] = (12).to_bytes(2, "big")  # pm10
@@ -418,6 +425,43 @@ def all_cases() -> list[dict]:
     add(case("a1", 0x2714, "check_sensors_raw", responses=[a1_payload()]))
     add(case("a2", 0x4F60, "check_sensors_raw", responses=[a2_payload()]))
 
+    # Purifiers ---------------------------------------------------------
+    # Firmware 10026 frames, bytes from offset 27 (pit3k/python-broadlink#1).
+    # 26.4 C, 22 %, CO2 958, fan AUTO at speed 43.
+    online = (
+        "08 01 16 02 be 03 00 00 09 00 01 00 00 00 01 00 "
+        "00 00 00 00 00 00 00 00 00 00 00 00 a5 2b c0"
+    )
+    add(case("lifaair", 0x4EC2, "get_state", responses=[lifaair_payload(online)]))
+    # TURBO reports 0x8D, speed 121.
+    turbo = (
+        "0b 01 16 02 8b 03 00 00 09 00 01 00 00 00 01 00 "
+        "00 00 00 00 00 00 00 00 00 00 00 00 8d 79 c0"
+    )
+    add(
+        case(
+            "lifaair",
+            0x4EC2,
+            "set_fan_mode",
+            3,  # FanMode.TURBO
+            responses=[lifaair_payload(turbo)],
+        )
+    )
+    # Speed 50 reports MANUAL (0x85) at that speed.
+    manual = (
+        "0b 01 16 02 89 03 00 00 0a 00 02 00 00 00 02 00 "
+        "00 00 00 00 00 00 00 00 00 00 00 00 85 32 c0"
+    )
+    add(
+        case(
+            "lifaair",
+            0x4EC2,
+            "set_fan_speed",
+            50,
+            responses=[lifaair_payload(manual)],
+        )
+    )
+
     # Lights ------------------------------------------------------------
     lb_state = {
         "red": 128,
@@ -677,5 +721,14 @@ def error_cases() -> list[dict]:
             "kwargs": {},
             "responses": [EMPTY],
             "error_code": 0xFFF9,
+        },
+        {
+            "cls": "lifaair",
+            "devtype": 0x4EC2,
+            "method": "set_fan_mode",
+            "args": [3],  # FanMode.TURBO; the device answers -5
+            "kwargs": {},
+            "responses": [EMPTY],
+            "error_code": 0xFFFB,  # -5, StorageError
         },
     ]
